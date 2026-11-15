@@ -79,7 +79,7 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
       <label>Descripción</label>
       <input id="fDesc" placeholder="Ej: Taxi al aeropuerto" maxlength="80">
       <div class="row">
-        <div><label>Valor (COP)</label><input id="fMonto" inputmode="numeric" placeholder="0"></div>
+        <div><label>Valor (USD)</label><input id="fMonto" inputmode="decimal" placeholder="0.00"></div>
         <div><label>Fecha</label><input id="fFecha" type="date"></div>
       </div>
       <label>¿Quién pagó?</label>
@@ -153,7 +153,8 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
 const CATS=[["Transporte","🚕"],["Comida","🍽️"],["Alojamiento","🏨"],["Mercado","🛒"],["Bebidas","🍻"],["Actividades","🎟️"],["Otros","📦"]];
 const ICON=Object.fromEntries(CATS);
 const $=id=>document.getElementById(id);
-const fmt=n=>"$"+Math.round(n).toLocaleString("es-CO");
+const r2=n=>Math.round(n*100)/100;
+const fmt=n=>"US$"+r2(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const hoy=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
 
@@ -178,11 +179,11 @@ function calc(){
   }
   // liquidación mínima (greedy)
   const deud=[],acre=[];
-  for(const p of personas){const v=Math.round(bal[p]);if(v<-0)deud.push([p,-v]);else if(v>0)acre.push([p,v])}
+  for(const p of personas){const v=r2(bal[p]);if(v<0)deud.push([p,-v]);else if(v>0)acre.push([p,v])}
   deud.sort((a,b)=>b[1]-a[1]);acre.sort((a,b)=>b[1]-a[1]);
   const tr=[];let i=0,j=0;
-  while(i<deud.length&&j<acre.length){const x=Math.min(deud[i][1],acre[j][1]);if(x>=1)tr.push([deud[i][0],acre[j][0],x]);
-    deud[i][1]-=x;acre[j][1]-=x;if(deud[i][1]<1)i++;if(acre[j][1]<1)j++}
+  while(i<deud.length&&j<acre.length){const x=Math.min(deud[i][1],acre[j][1]);if(x>=0.01)tr.push([deud[i][0],acre[j][0],r2(x)]);
+    deud[i][1]=r2(deud[i][1]-x);acre[j][1]=r2(acre[j][1]-x);if(deud[i][1]<0.01)i++;if(acre[j][1]<0.01)j++}
   return{bal,pag,corr,cat,total,tr};
 }
 
@@ -196,7 +197,7 @@ function renderForm(){
   $("fHint").textContent=n?`Se divide entre ${n} → ${m?fmt(m/n):"$0"} c/u`:"Selecciona al menos una persona.";
   $("fSave").disabled=readOnly;
 }
-function parseMonto(){return +($("fMonto").value.replace(/[^\d]/g,""))||0}
+function parseMonto(){const s=$("fMonto").value.replace(",",".").replace(/[^\d.]/g,"");return r2(parseFloat(s)||0)}
 
 function render(){
   const r=calc();
@@ -220,7 +221,7 @@ function render(){
       ${readOnly?"":`<button class="lnk" data-ed="${g.id}">editar</button><button class="lnk" data-del="${g.id}">borrar</button>`}</div>
       <div class="amt">${fmt(g.monto)}</div></div>`}).join(""):'<div class="empty">Aún no hay movimientos.</div>';
   // saldos
-  $("saldos").innerHTML=personas.map(p=>{const b=Math.round(r.bal[p]);
+  $("saldos").innerHTML=personas.map(p=>{const b=r2(r.bal[p]);
     return `<div class="bal"><div><div class="t1">${esc(p)}</div><div class="t2">${fmt(r.pag[p])} · ${fmt(r.corr[p])}</div></div>
     <div class="amt ${b>0?"pos":b<0?"neg":""}">${b>0?"+":b<0?"−":""}${fmt(Math.abs(b))}</div></div>`}).join("")||'<div class="empty">Sin personas.</div>';
   $("pagos").innerHTML=r.tr.length?r.tr.map(([d,a,v],k)=>`<div class="pay"><div class="grow"><b>${esc(d)}</b> → <b>${esc(a)}</b><div class="t2">${fmt(v)}</div></div>
@@ -257,7 +258,7 @@ async function cargar(){
 
 // ---------- acciones ----------
 function resetForm(){editId=null;$("fDesc").value="";$("fMonto").value="";$("fFecha").value=hoy();form.part=new Set(personas);$("fTitle").textContent="Agregar gasto";$("fSave").textContent="Guardar gasto";$("fCancel").style.display="none";renderForm()}
-$("fMonto").addEventListener("input",e=>{const v=parseMonto();e.target.value=v?v.toLocaleString("es-CO"):"";renderForm()});
+$("fMonto").addEventListener("input",()=>renderForm());
 $("fTodos").onclick=()=>{form.part=form.part.size===personas.length?new Set():new Set(personas);renderForm()};
 $("fCancel").onclick=resetForm;
 $("fSave").onclick=async()=>{
@@ -276,7 +277,7 @@ document.addEventListener("click",async e=>{
   if(t.dataset.tab){document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b===t));
     ["gastos","saldos","grupo"].forEach(k=>$("tab-"+k).style.display=k===t.dataset.tab?"":"none");}
   if(t.dataset.ed){const g=gastos.find(x=>x.id===t.dataset.ed);if(!g)return;editId=g.id;
-    $("fDesc").value=g.descripcion||"";$("fMonto").value=(+g.monto).toLocaleString("es-CO");$("fFecha").value=g.fecha||hoy();
+    $("fDesc").value=g.descripcion||"";$("fMonto").value=String(+g.monto);$("fFecha").value=g.fecha||hoy();
     form.pagador=g.pagador;form.cat=g.categoria||"Otros";form.part=new Set(g.participantes||[]);
     $("fTitle").textContent="Editar movimiento";$("fSave").textContent="Guardar cambios";$("fCancel").style.display="";renderForm();window.scrollTo({top:0,behavior:"smooth"})}
   if(t.dataset.del){const g=gastos.find(x=>x.id===t.dataset.del);if(!g)return;

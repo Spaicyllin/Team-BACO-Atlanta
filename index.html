@@ -168,23 +168,32 @@ function confirmar(title,body){return new Promise(r=>{$("mTitle").textContent=ti
 
 // ---------- cálculo ----------
 function calc(){
+  // Saldos exactos; al final se redondean a centavos de forma que sumen exactamente cero
+  // (el centavo que sobra va a quien tenga la mayor fracción, no siempre a la misma persona).
+  const C=n=>Math.round((+n||0)*100);
   const bal={},pag={},corr={};personas.forEach(p=>{bal[p]=0;pag[p]=0;corr[p]=0});
   const cat={};let total=0;
   for(const g of gastos){
-    const m=+g.monto||0, parts=(g.participantes||[]).filter(p=>p in bal);
-    if(!parts.length||!(g.pagador in bal))continue;
+    const m=C(g.monto), parts=[...new Set(g.participantes||[])].filter(p=>p in bal);
+    if(m<=0||!parts.length||!(g.pagador in bal))continue;
     const cuota=m/parts.length;
-    bal[g.pagador]+=m; parts.forEach(p=>bal[p]-=cuota);
-    if(g.tipo!=="pago"){pag[g.pagador]+=m;parts.forEach(p=>corr[p]+=cuota);total+=m;cat[g.categoria||"Otros"]=(cat[g.categoria||"Otros"]||0)+m}
+    bal[g.pagador]+=m; parts.forEach(p=>{bal[p]-=cuota;if(g.tipo!=="pago")corr[p]+=cuota});
+    if(g.tipo!=="pago"){pag[g.pagador]+=m;total+=m;const c=g.categoria||"Otros";cat[c]=(cat[c]||0)+m}
   }
-  // liquidación mínima (greedy)
+  // redondeo a centavos enteros con suma cero (mayor residuo)
+  const bi={};let suma=0;
+  for(const p of personas){bi[p]=Math.floor(bal[p]+1e-7);suma+=bi[p]}
+  const orden=[...personas].sort((x,y)=>(bal[y]-Math.floor(bal[y]+1e-7))-(bal[x]-Math.floor(bal[x]+1e-7)));
+  for(let k=0;k<-suma&&k<orden.length;k++)bi[orden[k]]+=1;
+  // liquidación (greedy) en centavos
   const deud=[],acre=[];
-  for(const p of personas){const v=r2(bal[p]);if(v<0)deud.push([p,-v]);else if(v>0)acre.push([p,v])}
+  for(const p of personas){const v=bi[p];if(v<0)deud.push([p,-v]);else if(v>0)acre.push([p,v])}
   deud.sort((a,b)=>b[1]-a[1]);acre.sort((a,b)=>b[1]-a[1]);
   const tr=[];let i=0,j=0;
-  while(i<deud.length&&j<acre.length){const x=Math.min(deud[i][1],acre[j][1]);if(x>=0.01)tr.push([deud[i][0],acre[j][0],r2(x)]);
-    deud[i][1]=r2(deud[i][1]-x);acre[j][1]=r2(acre[j][1]-x);if(deud[i][1]<0.01)i++;if(acre[j][1]<0.01)j++}
-  return{bal,pag,corr,cat,total,tr};
+  while(i<deud.length&&j<acre.length){const x=Math.min(deud[i][1],acre[j][1]);tr.push([deud[i][0],acre[j][0],x/100]);
+    deud[i][1]-=x;acre[j][1]-=x;if(!deud[i][1])i++;if(!acre[j][1])j++}
+  const D=o=>Object.fromEntries(Object.entries(o).map(([k,v])=>[k,v/100]));
+  return{bal:D(bi),pag:D(pag),corr:D(corr),cat:D(cat),total:total/100,tr};
 }
 
 // ---------- render ----------
@@ -194,10 +203,19 @@ function renderForm(){
   const fc=$("fCat");fc.innerHTML="";CATS.forEach(([c,i])=>fc.appendChild(chip(i+" "+c,form.cat===c,()=>{form.cat=c;renderForm()})));
   const pp=$("fPart");pp.innerHTML="";personas.forEach(p=>pp.appendChild(chip(p,form.part.has(p),()=>{form.part.has(p)?form.part.delete(p):form.part.add(p);renderForm()})));
   const m=parseMonto(),n=form.part.size;
-  $("fHint").textContent=n?`Se divide entre ${n} → ${m?fmt(m/n):"$0"} c/u`:"Selecciona al menos una persona.";
+  $("fHint").textContent=(m?`Valor: ${fmt(m)} · `:($("fMonto").value.trim()?"Valor no válido · ":""))+(n?`Se divide entre ${n} → ${m?fmt(m/n):"US$0.00"} c/u`:"Selecciona al menos una persona.");
   $("fSave").disabled=readOnly;
 }
-function parseMonto(){const s=$("fMonto").value.replace(",",".").replace(/[^\d.]/g,"");return r2(parseFloat(s)||0)}
+function parseMonto(){
+  let s=$("fMonto").value.trim().replace(/[\s$]|US|usd/gi,"");
+  if(!s||/[^\d.,]/.test(s))return 0;               // negativos, letras o símbolos: inválido
+  const lc=s.lastIndexOf(","), lp=s.lastIndexOf(".");
+  if(lc>-1&&lp>-1){const dec=lc>lp?",":".";s=s.split(dec==","?".":",").join("").replace(",",".")}  // 1,234.50 ó 1.234,50
+  else if(lc>-1){s=/^\d{1,3}(,\d{3})+$/.test(s)?s.split(",").join(""):s.replace(",",".")}     // 1,234 miles · 12,5 decimal
+  else if((s.match(/\./g)||[]).length>1){s=/^\d{1,3}(\.\d{3})+$/.test(s)?s.split(".").join(""):""}  // 1.234.567 miles
+  if(!/^\d+(\.\d{1,2})?$/.test(s))return 0;              // máximo 2 decimales (centavos)
+  return r2(parseFloat(s));
+}
 
 function render(){
   const r=calc();
@@ -292,7 +310,7 @@ $("pAdd").onclick=async()=>{const n=$("pNuevo").value.trim();if(!n)return;
   try{await savePersonas([...personas,n]);$("pNuevo").value="";form.part.add(n);toast("Agregada")}catch(e){writeErr(e)}};
 $("copy").onclick=async()=>{const r=calc();
   let s=`💸 Cuentas del grupo\nTotal: ${fmt(r.total)}\n\nPor categoría:\n`+Object.entries(r.cat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`• ${c}: ${fmt(v)}`).join("\n");
-  s+=`\n\nSaldos:\n`+personas.map(p=>`• ${p}: pagó ${fmt(r.pag[p])}, le corresponde ${fmt(r.corr[p])}`).join("\n");
+  s+=`\n\nSaldos (ya incluye pagos entre amigos):\n`+personas.map(p=>{const b=r2(r.bal[p]);return `• ${p}: ${b>0?"le deben "+fmt(b):b<0?"debe "+fmt(-b):"a paz y salvo"} (gastó ${fmt(r.pag[p])}, le correspondía ${fmt(r.corr[p])})`}).join("\n");
   s+=`\n\nPagos pendientes:\n`+(r.tr.length?r.tr.map(([d,a,v])=>`• ${d} → ${a}: ${fmt(v)}`).join("\n"):"Todos a paz y salvo ✅");
   try{await navigator.clipboard.writeText(s);toast("Resumen copiado")}catch{toast("No se pudo copiar")}};
 

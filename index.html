@@ -45,7 +45,8 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
 .pay{display:flex;align-items:center;gap:8px;padding:10px;border-radius:10px;background:var(--negb);margin-bottom:8px}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}
 .bar i{display:block;height:100%;background:var(--acc)}
-.filters{display:flex;gap:8px;margin-bottom:10px}
+.filters{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}.filters select:first-child{grid-column:1/-1}
+.filsum{font-size:13px;color:var(--mut);margin:-2px 0 8px;display:flex;justify-content:space-between;gap:8px}.filsum b{color:var(--ink)}
 .banner{padding:10px 12px;border-radius:10px;background:var(--negb);color:var(--neg);font-size:13px;margin-bottom:10px;display:none}
 .empty{color:var(--mut);text-align:center;padding:20px 0}
 .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:14px;opacity:0;transition:.2s;pointer-events:none}
@@ -98,9 +99,11 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
     <div class="card">
       <h2>Movimientos</h2>
       <div class="filters">
-        <select id="filCat"><option value="">Todas las categorías</option></select>
-        <select id="filPer"><option value="">Todas las personas</option></select>
+        <select id="filCat"></select>
+        <select id="filPag"></select>
+        <select id="filPar"></select>
       </div>
+      <div class="filsum" id="filSum"></div>
       <div id="lista"></div>
     </div>
   </section>
@@ -223,14 +226,32 @@ function render(){
   const nG=gastos.filter(g=>g.tipo!=="pago").length;
   $("tCount").textContent=`${nG} gasto${nG===1?"":"s"} · ${personas.length} personas`;
   $("sub").textContent=personas.length?personas.join(" · "):"Agrega las personas del grupo en la pestaña Personas.";
-  // filtros
-  const fc=$("filCat"),fpv=$("filPer"),vc=fc.value,vp=fpv.value;
-  fc.innerHTML='<option value="">Todas las categorías</option>'+CATS.map(([c])=>`<option ${c===vc?"selected":""}>${c}</option>`).join("")+`<option value="__pago" ${vc==="__pago"?"selected":""}>Pagos entre amigos</option>`;
-  fpv.innerHTML='<option value="">Todas las personas</option>'+personas.map(p=>`<option ${p===vp?"selected":""}>${esc(p)}</option>`).join("");
+  // filtros (solo cambian lo que se ve; no tocan los datos)
+  const fc=$("filCat"),fpg=$("filPag"),fpa=$("filPar"),vc=fc.value,vpg=fpg.value,vpa=fpa.value;
+  const opt=(v,t,cur)=>`<option value="${esc(v)}" ${v===cur?"selected":""}>${esc(t)}</option>`;
+  const pares=[...new Set(gastos.filter(g=>g.tipo==="pago").map(g=>g.pagador+"→"+((g.participantes||[])[0]||"")))].sort();
+  fc.innerHTML=opt("","Todos los movimientos",vc)+opt("__gastos","Solo gastos (sin pagos entre amigos)",vc)
+    +'<optgroup label="Categoría">'+CATS.map(([c,i])=>opt(c,i+" "+c,vc)).join("")+'</optgroup>'
+    +'<optgroup label="Pagos entre amigos">'+opt("__pago","🤝 Todos los pagos entre amigos",vc)+pares.map(p=>opt("__par:"+p,"🤝 "+p.replace("→"," → "),vc)).join("")+'</optgroup>';
+  fpg.innerHTML=opt("","Pagó: cualquiera",vpg)+personas.map(p=>opt(p,"Pagó: "+p,vpg)).join("");
+  fpa.innerHTML=opt("","Participa: cualquiera",vpa)+personas.map(p=>opt(p,"Participa: "+p,vpa)).join("");
   // lista
   let L=[...gastos].sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")||(b.creado||0)-(a.creado||0));
-  if(vc==="__pago")L=L.filter(g=>g.tipo==="pago");else if(vc)L=L.filter(g=>g.tipo!=="pago"&&g.categoria===vc);
-  if(vp)L=L.filter(g=>g.pagador===vp||(g.participantes||[]).includes(vp));
+  if(vc==="__gastos")L=L.filter(g=>g.tipo!=="pago");
+  else if(vc==="__pago")L=L.filter(g=>g.tipo==="pago");
+  else if(vc.startsWith("__par:")){const [d,r]=vc.slice(6).split("→");L=L.filter(g=>g.tipo==="pago"&&g.pagador===d&&(g.participantes||[])[0]===r)}
+  else if(vc)L=L.filter(g=>g.tipo!=="pago"&&g.categoria===vc);
+  if(vpg)L=L.filter(g=>g.pagador===vpg);
+  if(vpa)L=L.filter(g=>(g.participantes||[]).includes(vpa));
+  const filtrado=vc||vpg||vpa;
+  if(filtrado){
+    const sum=L.reduce((s,g)=>s+(+g.monto||0),0);
+    // parte que le toca a la persona filtrada en "Participa" (solo gastos, no pagos)
+    const parte=vpa?L.filter(g=>g.tipo!=="pago").reduce((s,g)=>s+(+g.monto||0)/((g.participantes||[]).length||1),0):0;
+    $("filSum").innerHTML=`<span>${L.length} movimiento${L.length===1?"":"s"} · <b>${fmt(sum)}</b></span>`
+      +(vpa?`<span>Parte de ${esc(vpa)}: <b>${fmt(parte)}</b></span>`:"")
+      +`<button class="lnk" id="filClear">quitar filtros</button>`;
+  }else $("filSum").innerHTML="";
   $("lista").innerHTML=L.length?L.map(g=>{
     const parts=g.participantes||[],todos=parts.length===personas.length;
     const det=g.tipo==="pago"?`${esc(g.pagador)} le pagó a ${esc(parts[0])}`:`Pagó ${esc(g.pagador)} · ${todos?"todos":parts.map(esc).join(", ")} (${fmt((+g.monto)/parts.length)} c/u)`;
@@ -279,6 +300,7 @@ function resetForm(){editId=null;$("fDesc").value="";$("fMonto").value="";$("fFe
 $("fMonto").addEventListener("input",()=>renderForm());
 $("fTodos").onclick=()=>{form.part=form.part.size===personas.length?new Set():new Set(personas);renderForm()};
 $("fCancel").onclick=resetForm;
+["filCat","filPag","filPar"].forEach(id=>$(id).addEventListener("change",render));
 $("fSave").onclick=async()=>{
   const m=parseMonto();
   if(!form.pagador)return toast("¿Quién pagó?");
@@ -292,6 +314,7 @@ $("fSave").onclick=async()=>{
 };
 document.addEventListener("click",async e=>{
   const t=e.target;
+  if(t.id==="filClear"){$("filCat").value="";$("filPag").value="";$("filPar").value="";render();return}
   if(t.dataset.tab){document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b===t));
     ["gastos","saldos","grupo"].forEach(k=>$("tab-"+k).style.display=k===t.dataset.tab?"":"none");}
   if(t.dataset.ed){const g=gastos.find(x=>x.id===t.dataset.ed);if(!g)return;editId=g.id;

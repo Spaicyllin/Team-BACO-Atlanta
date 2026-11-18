@@ -135,7 +135,7 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
         <input id="pNuevo" placeholder="Nombre" maxlength="40">
         <button class="btn" id="pAdd" style="flex:none">Agregar</button>
       </div>
-      <div class="hint">Solo se puede quitar a alguien que no aparezca en ningún gasto.</div>
+      <div class="hint">Una persona nueva solo entra en los gastos que se registren desde que se agrega; los gastos anteriores no la incluyen. «Ya no participa» la saca de las opciones para gastos nuevos, pero sus cuentas y saldos se mantienen. Solo se puede quitar del todo a alguien que no aparezca en ningún gasto.</div>
     </div>
     <div class="card">
       <h2>Copiar resumen</h2>
@@ -161,6 +161,8 @@ const fmt=n=>"US$"+r2(n).toLocaleString("en-US",{minimumFractionDigits:2,maximum
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const hoy=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
 
+let inactivos=[],colInactivos=false;
+const activos=()=>personas.filter(p=>!inactivos.includes(p));
 let personas=[], gastos=[], editId=null, readOnly=false;
 let form={pagador:"",cat:"Comida",part:new Set()};
 
@@ -202,9 +204,10 @@ function calc(){
 // ---------- render ----------
 function chip(txt,on,fn){const b=document.createElement("span");b.className="chip"+(on?" on":"");b.textContent=txt;b.onclick=fn;return b}
 function renderForm(){
-  const fp=$("fPagador");fp.innerHTML="";personas.forEach(p=>fp.appendChild(chip(p,form.pagador===p,()=>{form.pagador=p;renderForm()})));
+  const vis=personas.filter(p=>!inactivos.includes(p)||form.part.has(p)||form.pagador===p);
+  const fp=$("fPagador");fp.innerHTML="";vis.forEach(p=>fp.appendChild(chip(p,form.pagador===p,()=>{form.pagador=p;renderForm()})));
   const fc=$("fCat");fc.innerHTML="";CATS.forEach(([c,i])=>fc.appendChild(chip(i+" "+c,form.cat===c,()=>{form.cat=c;renderForm()})));
-  const pp=$("fPart");pp.innerHTML="";personas.forEach(p=>pp.appendChild(chip(p,form.part.has(p),()=>{form.part.has(p)?form.part.delete(p):form.part.add(p);renderForm()})));
+  const pp=$("fPart");pp.innerHTML="";vis.forEach(p=>pp.appendChild(chip(p,form.part.has(p),()=>{form.part.has(p)?form.part.delete(p):form.part.add(p);renderForm()})));
   const m=parseMonto(),n=form.part.size;
   $("fHint").textContent=(m?`Valor: ${fmt(m)} · `:($("fMonto").value.trim()?"Valor no válido · ":""))+(n?`Se divide entre ${n} → ${m?fmt(m/n):"US$0.00"} c/u`:"Selecciona al menos una persona.");
   $("fSave").disabled=readOnly;
@@ -253,7 +256,7 @@ function render(){
       +`<button class="lnk" id="filClear">quitar filtros</button>`;
   }else $("filSum").innerHTML="";
   $("lista").innerHTML=L.length?L.map(g=>{
-    const parts=g.participantes||[],todos=parts.length===personas.length;
+    const parts=g.participantes||[],todos=parts.length===personas.length&&personas.every(p=>parts.includes(p));
     const det=g.tipo==="pago"?`${esc(g.pagador)} le pagó a ${esc(parts[0])}`:`Pagó ${esc(g.pagador)} · ${todos?"todos":parts.map(esc).join(", ")} (${fmt((+g.monto)/parts.length)} c/u)`;
     return `<div class="item"><div class="ico">${g.tipo==="pago"?"🤝":(ICON[g.categoria]||"📦")}</div>
       <div class="grow"><div class="t1">${esc(g.descripcion||g.categoria)}</div><div class="t2">${det}</div><div class="t2">${esc(g.fecha||"")}</div>
@@ -272,7 +275,10 @@ function render(){
     <div class="bar"><i style="width:${v/mx*100}%"></i></div></div>`).join(""):'<div class="empty">Sin gastos.</div>';
   // personas
   const usadas=new Set();gastos.forEach(g=>{usadas.add(g.pagador);(g.participantes||[]).forEach(p=>usadas.add(p))});
-  $("personas").innerHTML=personas.map(p=>`<div class="bal"><span class="t1">${esc(p)}</span>${readOnly||usadas.has(p)?"":`<button class="lnk" data-rm="${esc(p)}">quitar</button>`}</div>`).join("")||'<div class="empty">Agrega a las personas del grupo.</div>';
+  $("personas").innerHTML=personas.map(p=>{const ina=inactivos.includes(p);
+    return `<div class="bal"><span class="t1">${esc(p)}${ina?' <span class="t2">· no activa</span>':""}</span><span>`
+    +(readOnly||!colInactivos?"":`<button class="lnk" data-act="${esc(p)}">${ina?"reactivar":"ya no participa"}</button>`)
+    +(readOnly||usadas.has(p)?"":`<button class="lnk" data-rm="${esc(p)}">quitar</button>`)+`</span></div>`}).join("")||'<div class="empty">Agrega a las personas del grupo.</div>';
   $("pAdd").disabled=readOnly;
   renderForm();
 }
@@ -284,21 +290,23 @@ const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 const toRow=(id,d)=>({id,descripcion:d.descripcion,monto:d.monto,pagador:d.pagador,categoria:d.categoria,participantes:d.participantes,fecha:d.fecha,tipo:d.tipo,creado:d.creado});
 async function saveGasto(id,data){const{error}=await sb.from("gastos").upsert(toRow(id,data));if(error)throw error;await cargar()}
 async function delGasto(id){const{error}=await sb.from("gastos").delete().eq("id",id);if(error)throw error;await cargar()}
+async function saveInactivos(list){const{error}=await sb.from("grupo").update({inactivos:list}).eq("id",1);if(error)throw error;await cargar()}
 async function savePersonas(list){const{error}=await sb.from("grupo").upsert({id:1,personas:list});if(error)throw error;await cargar()}
 function newId(){return "g"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
 function writeErr(e){console.error(e);toast("No se pudo guardar. Revisa tu conexión e intenta de nuevo.")}
 let primera=true;
 async function cargar(){
-  const[g,p]=await Promise.all([sb.from("gastos").select("*"),sb.from("grupo").select("personas").eq("id",1).maybeSingle()]);
+  const[g,p]=await Promise.all([sb.from("gastos").select("*"),sb.from("grupo").select("*").eq("id",1).maybeSingle()]);
   if(g.error||p.error){banner("No se pudo conectar con la base de datos. Recarga la página.");return}
-  banner("");gastos=(g.data||[]).map(r=>({...r,monto:+r.monto}));personas=p.data?.personas||[];
-  if(primera){form.part=new Set(personas);primera=false}render();
+  banner("");gastos=(g.data||[]).map(r=>({...r,monto:+r.monto}));personas=p.data?.personas||[];colInactivos=!!p.data&&("inactivos" in p.data);inactivos=(p.data?.inactivos||[]).filter(x=>personas.includes(x));
+  if(!editId)inactivos.forEach(x=>form.part.delete(x));
+  if(primera){form.part=new Set(activos());primera=false}render();
 }
 
 // ---------- acciones ----------
-function resetForm(){editId=null;$("fDesc").value="";$("fMonto").value="";$("fFecha").value=hoy();form.part=new Set(personas);$("fTitle").textContent="Agregar gasto";$("fSave").textContent="Guardar gasto";$("fCancel").style.display="none";renderForm()}
+function resetForm(){editId=null;$("fDesc").value="";$("fMonto").value="";$("fFecha").value=hoy();form.part=new Set(activos());$("fTitle").textContent="Agregar gasto";$("fSave").textContent="Guardar gasto";$("fCancel").style.display="none";renderForm()}
 $("fMonto").addEventListener("input",()=>renderForm());
-$("fTodos").onclick=()=>{form.part=form.part.size===personas.length?new Set():new Set(personas);renderForm()};
+$("fTodos").onclick=()=>{const A=activos();form.part=A.every(p=>form.part.has(p))&&form.part.size===A.length?new Set():new Set(A);renderForm()};
 $("fCancel").onclick=resetForm;
 ["filCat","filPag","filPar"].forEach(id=>$(id).addEventListener("change",render));
 $("fSave").onclick=async()=>{
@@ -326,6 +334,9 @@ document.addEventListener("click",async e=>{
   if(t.dataset.pay!==undefined){const [d,a,v]=window._tr[+t.dataset.pay];
     if(await confirmar("Registrar pago",`${d} le pagó ${fmt(v)} a ${a}.`)){
       try{await saveGasto(newId(),{descripcion:`Pago ${d} → ${a}`,monto:v,pagador:d,categoria:"Pago",participantes:[a],fecha:hoy(),tipo:"pago",creado:Date.now()});toast("Pago registrado")}catch(err){writeErr(err)}}}
+  if(t.dataset.act){const p=t.dataset.act,ina=inactivos.includes(p);
+    if(await confirmar(ina?"¿Reactivar a "+p+"?":p+" ya no participa",ina?"Vuelve a aparecer para los gastos nuevos.":"Deja de aparecer para los gastos nuevos. Sus gastos y su saldo se mantienen.")){
+      try{await saveInactivos(ina?inactivos.filter(x=>x!==p):[...inactivos,p]);toast("Listo")}catch(err){writeErr(err)}}}
   if(t.dataset.rm){const p=t.dataset.rm;if(await confirmar("¿Quitar persona?",p)){try{await savePersonas(personas.filter(x=>x!==p))}catch(err){writeErr(err)}}}
 });
 $("pAdd").onclick=async()=>{const n=$("pNuevo").value.trim();if(!n)return;

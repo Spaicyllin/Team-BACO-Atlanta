@@ -113,7 +113,12 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
     <div class="card">
       <h2>¿Quién le paga a quién?</h2>
       <div id="pagos"></div>
-      <div class="hint">Mínimo número de transferencias para quedar a paz y salvo. Al registrar un pago, los saldos se ajustan.</div>
+      <div class="hint">Sugerencia para quedar a paz y salvo con pocas transferencias. Al registrar un pago puedes poner el valor real (más o menos de lo sugerido) y todo se recalcula.</div>
+      <div class="actions"><button class="btn sec sm" id="otroPago">+ Registrar otro pago</button></div>
+    </div>
+    <div class="card">
+      <h2>Pagos ya hechos</h2>
+      <div id="hechos"></div>
     </div>
     <div class="card">
       <h2>Saldo por persona</h2>
@@ -145,6 +150,14 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
   </section>
 </div>
 
+<div class="modal" id="pmodal"><div class="card">
+  <h2 id="pmTitle">Registrar pago</h2>
+  <div class="row"><div><label>Quién paga</label><select id="pmDe"></select></div><div><label>A quién</label><select id="pmA"></select></div></div>
+  <label>Valor pagado (USD)</label><input id="pmMonto" inputmode="decimal">
+  <label>Fecha</label><input id="pmFecha" type="date">
+  <div class="hint" id="pmHint"></div>
+  <div class="actions"><button class="btn" id="pmOk">Guardar pago</button><button class="btn sec" id="pmNo">Cancelar</button></div>
+</div></div>
 <div class="modal" id="modal"><div class="card">
   <h2 id="mTitle"></h2><div id="mBody" class="t2"></div>
   <div class="actions"><button class="btn" id="mOk">Confirmar</button><button class="btn sec" id="mNo">Cancelar</button></div>
@@ -269,6 +282,9 @@ function render(){
   $("pagos").innerHTML=r.tr.length?r.tr.map(([d,a,v],k)=>`<div class="pay"><div class="grow"><b>${esc(d)}</b> → <b>${esc(a)}</b><div class="t2">${fmt(v)}</div></div>
     ${readOnly?"":`<button class="btn sm" data-pay="${k}">Registrar pago</button>`}</div>`).join(""):'<div class="empty">✅ Todos están a paz y salvo.</div>';
   window._tr=r.tr;
+  const H=gastos.filter(g=>g.tipo==="pago").sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")||(b.creado||0)-(a.creado||0));
+  $("hechos").innerHTML=H.length?H.map(g=>`<div class="item"><div class="ico">🤝</div><div class="grow"><div class="t1">${esc(g.pagador)} → ${esc((g.participantes||[])[0])}</div><div class="t2">${esc(g.fecha||"")}</div>
+    ${readOnly?"":`<button class="lnk" data-pedit="${g.id}">editar</button><button class="lnk" data-del="${g.id}">borrar</button>`}</div><div class="amt">${fmt(g.monto)}</div></div>`).join(""):'<div class="empty">Aún no hay pagos registrados.</div>';
   const mx=Math.max(1,...Object.values(r.cat));
   $("cats").innerHTML=Object.keys(r.cat).length?Object.entries(r.cat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div style="margin:10px 0">
     <div style="display:flex;justify-content:space-between"><span>${ICON[c]||"📦"} ${esc(c)}</span><span class="t1">${fmt(v)} <span class="t2">${Math.round(v/r.total*100)}%</span></span></div>
@@ -303,6 +319,35 @@ async function cargar(){
   if(primera){form.part=new Set(activos());primera=false}render();
 }
 
+// ---------- registrar / editar pago entre amigos ----------
+let pm={};
+function leerNum(s){s=String(s||"").trim().replace(/[\s$]|US|usd/gi,"");if(!s||/[^\d.,]/.test(s))return 0;
+  const lc=s.lastIndexOf(","),lp=s.lastIndexOf(".");
+  if(lc>-1&&lp>-1){const dec=lc>lp?",":".";s=s.split(dec==","?".":",").join("").replace(",",".")}
+  else if(lc>-1){s=/^\d{1,3}(,\d{3})+$/.test(s)?s.split(",").join(""):s.replace(",",".")}
+  else if((s.match(/\./g)||[]).length>1){s=/^\d{1,3}(\.\d{3})+$/.test(s)?s.split(".").join(""):""}
+  return /^\d+(\.\d{1,2})?$/.test(s)?r2(parseFloat(s)):0}
+function pmHint(){const m=leerNum($("pmMonto").value),de=$("pmDe").value,a=$("pmA").value;let s="";
+  if(de&&de===a)s="Quien paga y quien recibe deben ser distintos.";
+  else if(!m)s=$("pmMonto").value.trim()?"Valor no válido.":"Escribe el valor que realmente se pagó.";
+  else{s=`${de} le paga ${fmt(m)} a ${a}.`;
+    if(pm.sugerido&&de===pm.de&&a===pm.a){const dif=r2(m-pm.sugerido);
+      if(dif>0)s+=` Es ${fmt(dif)} más de lo sugerido; esa diferencia queda a favor de ${de} y se recalcula.`;
+      else if(dif<0)s+=` Es ${fmt(-dif)} menos de lo sugerido; ${de} queda debiendo esa diferencia.`;}}
+  $("pmHint").textContent=s}
+function abrirPago(o){pm=o;const A=personas.filter(p=>!inactivos.includes(p)||p===o.de||p===o.a);
+  const opts=v=>A.map(p=>`<option ${p===v?"selected":""}>${esc(p)}</option>`).join("");
+  $("pmTitle").textContent=o.id?"Editar pago":"Registrar pago";
+  $("pmDe").innerHTML=opts(o.de||A[0]);$("pmA").innerHTML=opts(o.a||A[1]||A[0]);
+  $("pmMonto").value=o.monto?String(r2(o.monto)):"";$("pmFecha").value=o.fecha||hoy();pmHint();$("pmodal").classList.add("on")}
+["pmDe","pmA","pmMonto"].forEach(id=>$(id).addEventListener("input",pmHint));
+$("pmNo").onclick=()=>$("pmodal").classList.remove("on");
+$("pmOk").onclick=async()=>{const m=leerNum($("pmMonto").value),de=$("pmDe").value,a=$("pmA").value;
+  if(!m||!de||!a||de===a)return pmHint();
+  const b=$("pmOk");b.disabled=true;
+  try{await saveGasto(pm.id||newId(),{descripcion:`Pago ${de} → ${a}`,monto:m,pagador:de,categoria:"Pago",participantes:[a],fecha:$("pmFecha").value||hoy(),tipo:"pago",creado:pm.creado||Date.now()});
+    $("pmodal").classList.remove("on");toast(pm.id?"Pago actualizado":"Pago registrado")}catch(err){writeErr(err)}finally{b.disabled=false}};
+
 // ---------- acciones ----------
 function resetForm(){editId=null;$("fDesc").value="";$("fMonto").value="";$("fFecha").value=hoy();form.part=new Set(activos());$("fTitle").textContent="Agregar gasto";$("fSave").textContent="Guardar gasto";$("fCancel").style.display="none";renderForm()}
 $("fMonto").addEventListener("input",()=>renderForm());
@@ -325,15 +370,16 @@ document.addEventListener("click",async e=>{
   if(t.id==="filClear"){$("filCat").value="";$("filPag").value="";$("filPar").value="";render();return}
   if(t.dataset.tab){document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b===t));
     ["gastos","saldos","grupo"].forEach(k=>$("tab-"+k).style.display=k===t.dataset.tab?"":"none");}
-  if(t.dataset.ed){const g=gastos.find(x=>x.id===t.dataset.ed);if(!g)return;editId=g.id;
+  if(t.dataset.ed){const g=gastos.find(x=>x.id===t.dataset.ed);if(!g)return;
+    if(g.tipo==="pago"){abrirPago({id:g.id,de:g.pagador,a:(g.participantes||[])[0],monto:+g.monto,fecha:g.fecha,creado:g.creado});return}editId=g.id;
     $("fDesc").value=g.descripcion||"";$("fMonto").value=String(+g.monto);$("fFecha").value=g.fecha||hoy();
     form.pagador=g.pagador;form.cat=g.categoria||"Otros";form.part=new Set(g.participantes||[]);
     $("fTitle").textContent="Editar movimiento";$("fSave").textContent="Guardar cambios";$("fCancel").style.display="";renderForm();window.scrollTo({top:0,behavior:"smooth"})}
   if(t.dataset.del){const g=gastos.find(x=>x.id===t.dataset.del);if(!g)return;
     if(await confirmar("¿Borrar movimiento?",`${g.descripcion} · ${fmt(g.monto)}`)){try{await delGasto(g.id);toast("Borrado")}catch(err){writeErr(err)}}}
-  if(t.dataset.pay!==undefined){const [d,a,v]=window._tr[+t.dataset.pay];
-    if(await confirmar("Registrar pago",`${d} le pagó ${fmt(v)} a ${a}.`)){
-      try{await saveGasto(newId(),{descripcion:`Pago ${d} → ${a}`,monto:v,pagador:d,categoria:"Pago",participantes:[a],fecha:hoy(),tipo:"pago",creado:Date.now()});toast("Pago registrado")}catch(err){writeErr(err)}}}
+  if(t.dataset.pay!==undefined){const [d,a,v]=window._tr[+t.dataset.pay];abrirPago({de:d,a,monto:v,sugerido:v})}
+  if(t.id==="otroPago")abrirPago({});
+  if(t.dataset.pedit){const g=gastos.find(x=>x.id===t.dataset.pedit);if(g)abrirPago({id:g.id,de:g.pagador,a:(g.participantes||[])[0],monto:+g.monto,fecha:g.fecha,creado:g.creado})}
   if(t.dataset.act){const p=t.dataset.act,ina=inactivos.includes(p);
     if(await confirmar(ina?"¿Reactivar a "+p+"?":p+" ya no participa",ina?"Vuelve a aparecer para los gastos nuevos.":"Deja de aparecer para los gastos nuevos. Sus gastos y su saldo se mantienen.")){
       try{await saveInactivos(ina?inactivos.filter(x=>x!==p):[...inactivos,p]);toast("Listo")}catch(err){writeErr(err)}}}
@@ -345,6 +391,8 @@ $("pAdd").onclick=async()=>{const n=$("pNuevo").value.trim();if(!n)return;
 $("copy").onclick=async()=>{const r=calc();
   let s=`💸 Cuentas del grupo\nTotal: ${fmt(r.total)}\n\nPor categoría:\n`+Object.entries(r.cat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`• ${c}: ${fmt(v)}`).join("\n");
   s+=`\n\nSaldos (ya incluye pagos entre amigos):\n`+personas.map(p=>{const b=r2(r.bal[p]);return `• ${p}: ${b>0?"le deben "+fmt(b):b<0?"debe "+fmt(-b):"a paz y salvo"} (gastó ${fmt(r.pag[p])}, le correspondía ${fmt(r.corr[p])})`}).join("\n");
+  const H=gastos.filter(g=>g.tipo==="pago");
+  if(H.length)s+=`\n\nPagos ya hechos:\n`+H.map(g=>`• ${g.pagador} → ${(g.participantes||[])[0]}: ${fmt(g.monto)}${g.fecha?" ("+g.fecha+")":""}`).join("\n");
   s+=`\n\nPagos pendientes:\n`+(r.tr.length?r.tr.map(([d,a,v])=>`• ${d} → ${a}: ${fmt(v)}`).join("\n"):"Todos a paz y salvo ✅");
   try{await navigator.clipboard.writeText(s);toast("Resumen copiado")}catch{toast("No se pudo copiar")}};
 

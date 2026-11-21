@@ -129,6 +129,16 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
       <h2>Gasto por categoría</h2>
       <div id="cats"></div>
     </div>
+    <div class="card">
+      <h2>Gastos por grupo</h2>
+      <div class="t2" style="margin-bottom:6px">Cuánto se gastó entre todos, entre parejas y en gastos de una sola persona. Toca un grupo para ver sus gastos.</div>
+      <div id="grupos"></div>
+    </div>
+    <div class="card">
+      <h2>Cuentas entre parejas</h2>
+      <div class="t2" style="margin-bottom:6px">Lo que cada persona le debe directamente a otra, gasto por gasto y descontando los pagos ya hechos. Es solo informativo: para cuadrar, usa «¿Quién le paga a quién?».</div>
+      <div id="parejas"></div>
+    </div>
   </section>
 
   <!-- GRUPO -->
@@ -214,6 +224,27 @@ function calc(){
   return{bal:D(bi),pag:D(pag),corr:D(corr),cat:D(cat),total:total/100,tr};
 }
 
+// ---------- resúmenes por grupo y por pareja ----------
+function porGrupo(){
+  const G={};
+  for(const g of gastos){if(g.tipo==="pago")continue;
+    const parts=[...new Set(g.participantes||[])];if(!parts.length)continue;
+    const todos=parts.length===personas.length&&personas.every(p=>parts.includes(p));
+    const ord=personas.filter(p=>parts.includes(p)).concat(parts.filter(p=>!personas.includes(p)));
+    const k=todos?"__todos":ord.join(", ");
+    const tipo=todos?0:parts.length===1?3:parts.length===2?2:1;
+    G[k]=G[k]||{k,tipo,nombre:todos?`Todo el grupo (${parts.length})`:parts.length===1?`Solo ${ord[0]}`:ord.join(" y ").replace(/ y (?=.* y )/g,", "),n:0,total:0,items:[]};
+    G[k].n++;G[k].total+=+g.monto||0;G[k].items.push(g)}
+  return Object.values(G).sort((a,b)=>a.tipo-b.tipo||b.total-a.total);
+}
+function porPareja(){
+  const D={};const add=(a,b,v)=>{const k=a<b?a+"|"+b:b+"|"+a,s=a<b?1:-1;D[k]=(D[k]||0)+s*v}; // >0: el primero (orden alfabético) le debe al segundo
+  for(const g of gastos){const m=+g.monto||0,parts=[...new Set(g.participantes||[])];if(!parts.length||m<=0)continue;
+    if(g.tipo==="pago"){parts.forEach(a=>{if(a!==g.pagador)add(a,g.pagador,m/parts.length)});continue}
+    parts.forEach(p=>{if(p!==g.pagador)add(p,g.pagador,m/parts.length)})}
+  return Object.entries(D).map(([k,v])=>{const [a,b]=k.split("|");v=r2(v);return v>0?[a,b,v]:[b,a,-v]}).filter(x=>x[2]>=0.01).sort((x,y)=>y[2]-x[2]);
+}
+
 // ---------- render ----------
 function chip(txt,on,fn){const b=document.createElement("span");b.className="chip"+(on?" on":"");b.textContent=txt;b.onclick=fn;return b}
 function renderForm(){
@@ -286,6 +317,12 @@ function render(){
   $("hechos").innerHTML=H.length?H.map(g=>`<div class="item"><div class="ico">🤝</div><div class="grow"><div class="t1">${esc(g.pagador)} → ${esc((g.participantes||[])[0])}</div><div class="t2">${esc(g.fecha||"")}</div>
     ${readOnly?"":`<button class="lnk" data-pedit="${g.id}">editar</button><button class="lnk" data-del="${g.id}">borrar</button>`}</div><div class="amt">${fmt(g.monto)}</div></div>`).join(""):'<div class="empty">Aún no hay pagos registrados.</div>';
   const mx=Math.max(1,...Object.values(r.cat));
+  const GR=porGrupo();
+  $("grupos").innerHTML=GR.length?GR.map(x=>`<details style="border-top:1px solid var(--line);padding:8px 0"><summary style="display:flex;justify-content:space-between;cursor:pointer;list-style:none">
+      <span><span class="t1">${esc(x.nombre)}</span> <span class="t2">· ${x.n} gasto${x.n===1?"":"s"}</span></span><span class="t1">${fmt(x.total)}</span></summary>
+      ${x.items.map(g=>`<div class="t2" style="display:flex;justify-content:space-between;padding:3px 0 3px 8px"><span>${esc(g.descripcion)} · pagó ${esc(g.pagador)}</span><span>${fmt(g.monto)}</span></div>`).join("")}</details>`).join(""):'<div class="empty">Sin gastos.</div>';
+  const PJ=porPareja();
+  $("parejas").innerHTML=PJ.length?PJ.map(([a,b,v])=>`<div class="bal"><span>${esc(a)} le debe a ${esc(b)}</span><span class="amt">${fmt(v)}</span></div>`).join(""):'<div class="empty">Nadie le debe a nadie.</div>';
   $("cats").innerHTML=Object.keys(r.cat).length?Object.entries(r.cat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div style="margin:10px 0">
     <div style="display:flex;justify-content:space-between"><span>${ICON[c]||"📦"} ${esc(c)}</span><span class="t1">${fmt(v)} <span class="t2">${Math.round(v/r.total*100)}%</span></span></div>
     <div class="bar"><i style="width:${v/mx*100}%"></i></div></div>`).join(""):'<div class="empty">Sin gastos.</div>';
@@ -393,7 +430,9 @@ $("copy").onclick=async()=>{const r=calc();
   s+=`\n\nSaldos (ya incluye pagos entre amigos):\n`+personas.map(p=>{const b=r2(r.bal[p]);return `• ${p}: ${b>0?"le deben "+fmt(b):b<0?"debe "+fmt(-b):"a paz y salvo"} (gastó ${fmt(r.pag[p])}, le correspondía ${fmt(r.corr[p])})`}).join("\n");
   const H=gastos.filter(g=>g.tipo==="pago");
   if(H.length)s+=`\n\nPagos ya hechos:\n`+H.map(g=>`• ${g.pagador} → ${(g.participantes||[])[0]}: ${fmt(g.monto)}${g.fecha?" ("+g.fecha+")":""}`).join("\n");
-  s+=`\n\nPagos pendientes:\n`+(r.tr.length?r.tr.map(([d,a,v])=>`• ${d} → ${a}: ${fmt(v)}`).join("\n"):"Todos a paz y salvo ✅");
+  s+=`\n\nGastos por grupo:\n`+porGrupo().map(x=>`• ${x.nombre}: ${fmt(x.total)} (${x.n})`).join("\n");
+  const PJ=porPareja();if(PJ.length)s+=`\n\nCuentas entre parejas (detalle):\n`+PJ.map(([a,b,v])=>`• ${a} le debe a ${b}: ${fmt(v)}`).join("\n");
+  s+=`\n\nPagos pendientes (para cuadrar todo):\n`+(r.tr.length?r.tr.map(([d,a,v])=>`• ${d} → ${a}: ${fmt(v)}`).join("\n"):"Todos a paz y salvo ✅");
   try{await navigator.clipboard.writeText(s);toast("Resumen copiado")}catch{toast("No se pudo copiar")}};
 
 // ---------- arranque ----------

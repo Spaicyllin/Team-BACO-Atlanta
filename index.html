@@ -151,7 +151,9 @@ input,select{width:100%;padding:11px;border:1px solid var(--line);border-radius:
     </div>
     <div class="card">
       <h2>Por persona</h2>
-      <div class="t2" style="margin-bottom:6px"><span class="sw" style="background:var(--c1)"></span>Pagó de su bolsillo · <span class="sw" style="background:var(--c3)"></span>Le correspondió (lo que consumió). % sobre el total registrado.</div>
+      <div class="chips" id="rFiltro" style="margin-bottom:8px"></div>
+      <div class="t2" id="rNota" style="margin-bottom:6px"></div>
+      <div class="t2" style="margin-bottom:6px"><span class="sw" style="background:var(--c1)"></span>Pagó de su bolsillo · <span class="sw" style="background:var(--c3)"></span>Le correspondió (lo que consumió)</div>
       <div id="rPersonas"></div>
     </div>
     <div class="card">
@@ -361,10 +363,22 @@ function render(){
    let acc=0;const seg=tv.map((v,k)=>{const a=acc;acc+=T?v/T*360:0;return `${tipos[k][1]} ${a}deg ${acc}deg`}).join(",");
    $("rReparto").innerHTML=`<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap"><div class="donut" style="background:conic-gradient(${T?seg:"var(--line) 0 360deg"})"></div><div class="grow">`
      +tipos.map(([t,c],k)=>`<div style="margin:6px 0"><div style="display:flex;justify-content:space-between;gap:8px"><span><span class="sw" style="background:${c}"></span>${t}</span><span class="t1">${fmt(tv[k])}</span></div><div class="t2" style="padding-left:14px">${pct(tv[k])}% · ${tn[k]} gasto${tn[k]===1?"":"s"}</div></div>`).join("")+`</div></div>`;
-   const mx=Math.max(1,...personas.map(p=>Math.max(r.pag[p],r.corr[p])));
-   $("rPersonas").innerHTML=personas.map(p=>`<div style="margin:12px 0"><div style="display:flex;justify-content:space-between"><span class="t1">${esc(p)}</span><span class="t2">${r2(r.bal[p])>0?"le deben "+fmt(r.bal[p]):r2(r.bal[p])<0?"debe "+fmt(-r.bal[p]):"a paz y salvo"}</span></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:4px"><div class="bar grow" style="margin:0"><i style="width:${r.pag[p]/mx*100}%;background:var(--c1)"></i></div><span class="t2" style="width:120px;text-align:right">${fmt(r.pag[p])} · ${pct(r.pag[p])}%</span></div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:3px"><div class="bar grow" style="margin:0"><i style="width:${r.corr[p]/mx*100}%;background:var(--c3)"></i></div><span class="t2" style="width:120px;text-align:right">${fmt(r.corr[p])} · ${pct(r.corr[p])}%</span></div></div>`).join("")||'<div class="empty">Sin personas.</div>';
+   // Por persona, separado por tipo de reparto: los % se calculan sobre el total de ESE tipo
+   const tipoDe=new Map();porGrupo().forEach(x=>x.items.forEach(g=>tipoDe.set(g,x.tipo)));
+   const sel=window._rsel??-1;
+   const fi=[["Todo",-1],["Todo el grupo",0],["Varios",1],["Parejas",2],["Individuales",3]];
+   $("rFiltro").innerHTML=fi.map(([t,v])=>`<span class="chip${sel===v?" on":""}" data-rsel="${v}">${t}</span>`).join("");
+   const pg={},co={};personas.forEach(p=>{pg[p]=0;co[p]=0});let TT=0,NN=0;
+   for(const g of gastos){if(g.tipo==="pago")continue;const tp=tipoDe.get(g);if(tp===undefined||(sel!==-1&&tp!==sel))continue;
+     const m=+g.monto||0,parts=[...new Set(g.participantes||[])].filter(p=>p in co);if(!parts.length)continue;
+     TT+=m;NN++;if(g.pagador in pg)pg[g.pagador]+=m;parts.forEach(p=>co[p]+=m/parts.length)}
+   const pc=v=>TT?Math.round(v/TT*1000)/10:0;
+   $("rNota").textContent=(sel===-1?"Todos los gastos":fi.find(x=>x[1]===sel)[0])+`: ${fmt(TT)} en ${NN} gasto${NN===1?"":"s"}. Los % son sobre ese total.`;
+   const mx=Math.max(1,...personas.map(p=>Math.max(pg[p],co[p])));
+   const quien=personas.filter(p=>sel===-1||pg[p]>0.004||co[p]>0.004);
+   $("rPersonas").innerHTML=(quien.map(p=>`<div style="margin:12px 0"><div style="display:flex;justify-content:space-between"><span class="t1">${esc(p)}</span>${sel===-1?`<span class="t2">${r2(r.bal[p])>0?"le deben "+fmt(r.bal[p]):r2(r.bal[p])<0?"debe "+fmt(-r.bal[p]):"a paz y salvo"}</span>`:`<span class="t2">${r2(pg[p]-co[p])>0?"puso "+fmt(pg[p]-co[p])+" de más":r2(pg[p]-co[p])<0?"puso "+fmt(co[p]-pg[p])+" de menos":"cuadrado"}</span>`}</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px"><div class="bar grow" style="margin:0"><i style="width:${pg[p]/mx*100}%;background:var(--c1)"></i></div><span class="t2" style="width:120px;text-align:right">${fmt(pg[p])} · ${pc(pg[p])}%</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:3px"><div class="bar grow" style="margin:0"><i style="width:${co[p]/mx*100}%;background:var(--c3)"></i></div><span class="t2" style="width:120px;text-align:right">${fmt(co[p])} · ${pc(co[p])}%</span></div></div>`).join(""))||'<div class="empty">No hay gastos de este tipo.</div>';
   }
   $("cats").innerHTML=Object.keys(r.cat).length?Object.entries(r.cat).sort((a,b)=>b[1]-a[1]).map(([c,v])=>`<div style="margin:10px 0">
     <div style="display:flex;justify-content:space-between"><span>${ICON[c]||"📦"} ${esc(c)}</span><span class="t1">${fmt(v)} <span class="t2">${Math.round(v/r.total*100)}%</span></span></div>
@@ -447,6 +461,7 @@ $("fSave").onclick=async()=>{
 };
 document.addEventListener("click",async e=>{
   const t=e.target;
+  if(t.dataset.rsel!==undefined){window._rsel=+t.dataset.rsel;render();return}
   if(t.id==="filClear"){$("filCat").value="";$("filPag").value="";$("filPar").value="";render();return}
   if(t.dataset.tab){document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b===t));
     ["gastos","saldos","resumen","grupo"].forEach(k=>$("tab-"+k).style.display=k===t.dataset.tab?"":"none");}
